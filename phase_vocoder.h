@@ -1,0 +1,4 @@
+#ifndef PHASE_VOCODER_FUNCTIONS
+#define PHASE_VOCODER_FUNCTIONS
+
+#endif
