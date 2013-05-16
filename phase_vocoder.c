@@ -6,13 +6,18 @@
 #include <math.h>
 #include "wav.h"
 
+//Debug switch:
+//#define DEBUG_MODE
+
 //Function macros:
 #define GET_STEP(w) ((w) / 2 + (w) % 2)
+//#define GET_STEP(w) (w)
 #define REAL_PART(c) (c).components[0]
 #define IMAG_PART(c) (c).components[1]
 #define MAGNITUDE(p) (p).components[0]
 #define PHASE(p) (p).components[1]
 #define COMPONENTS(k) (k).components
+#define ASSERT(b,m) ((b)?puts(m):0)
 
 //Mathy macros:
 #define HANNING_CONSTANT 0.5
@@ -109,15 +114,11 @@ fftw_complex** stft_forward (int n, double* data, int window) {
     
     //Put the result of the fourier transform into the output array:
     result[m] = (fftw_complex*) malloc (nc * sizeof(fftw_complex));
-#ifdef DEBUG_MODE
-    for (int i = 0; i < nc; ++i) {
-      printf("%d: %f\t%f\n", i, fftw_output[i][0], fftw_output[i][1]);
+    for (int x = 0; x < nc; ++x) {
+      result[m][x][0] = fftw_output[x][0];
+      result[m][x][1] = fftw_output[x][1];
     }
-#endif
-    memcpy(result[m], fftw_output, nc);
   }
-
-  printf("Input is %p.\n", fftw_input);
 
   //Clean up:
   fftw_destroy_plan(stft_plan);
@@ -141,7 +142,7 @@ double* stft_backward(int n, fftw_complex** data, int window) {
   int nc = (window / 2) + 1;
 
   //Construct the output array:
-  double* result = (double*) malloc (n * sizeof(double));
+  double* result = (double*) calloc (n, sizeof(double));
 
   //Construct our temporary io arrays:
   fftw_complex* fftw_input = (fftw_complex*) fftw_malloc(window * sizeof(fftw_complex));
@@ -150,21 +151,24 @@ double* stft_backward(int n, fftw_complex** data, int window) {
   //Create an fftw plan:
   fftw_plan stft_plan = fftw_plan_dft_c2r_1d (window, fftw_input, fftw_output, FFTW_MEASURE);
 
-  for (int i = 0, m = 0; m < (n - window) / step; i += step & ++m) {
+  for (int i = 0, m = 0; m < (n - window) / step; (i += step) & (++m)) {
     //Fill the input array with the needed values:
-    memcpy(fftw_input, data[m], nc);
+    for (int x = 0; x < nc; ++x) {
+      fftw_input[x][0] = data[m][x][0];
+      fftw_input[x][1] = data[m][x][1];
+    }
 
     //Execute the plan:
     fftw_execute(stft_plan);
 
     //Overlap-add these values to the result:
-    for (int x = 0; x < window; ++x) result[i + x] = fftw_output[x] * hanning_window(x, window);
+    for (int x = 0; x < window; ++x) result[i + x] += fftw_output[x] / window * hanning_window(x, window);
   }
   
   //Clean up:
+  fftw_destroy_plan(stft_plan);
   fftw_free(fftw_input);
   fftw_free(fftw_output);
-  fftw_destroy_plan(stft_plan);
 
   //Return:
   return result;
@@ -173,7 +177,9 @@ double* stft_backward(int n, fftw_complex** data, int window) {
 fftw_complex** time_stretch(int window, int new_window, int n_windows, fftw_complex** input) {
   fftw_complex** result = (fftw_complex**) malloc (n_windows * sizeof(fftw_complex*));
   double target_phases[window];
-
+#ifdef DEBUG_MODE
+  puts("BEGIN TIME STRETCH DEBUG");
+#endif
   //Record the size of the input and output arrays:
   int inc = (window / 2) + 1;
   int onc = (new_window / 2) + 1;
@@ -184,6 +190,9 @@ fftw_complex** time_stretch(int window, int new_window, int n_windows, fftw_comp
     
     for (int x = 0; x < inc; ++x) {
       //Get polar coordinates for this transform value:
+#ifdef DEBUG_MODE
+      printf("%d:{%f, %f}", x * new_window / window, input[i][x][0], input[i][x][1]);
+#endif
       cartesian_complex packaged = package(input[i][x]);
       polar_complex polarized = polarize(packaged);
 
@@ -194,7 +203,7 @@ fftw_complex** time_stretch(int window, int new_window, int n_windows, fftw_comp
       //Set the output value to this value:
       cartesian_complex cartesized = cartesize(polarized);
 #ifdef DEBUG_MODE
-      printf("%d: {%f, %f} -> {%f, %f} -> {%f, %f}.\n", x * new_window / window, REAL_PART(packaged), IMAG_PART(packaged), MAGNITUDE(polarized), PHASE(polarized), REAL_PART(cartesized), IMAG_PART(cartesized));
+      printf(" -> {%f, %f} -> {%f, %f} -> {%f, %f}.\n", REAL_PART(packaged), IMAG_PART(packaged), MAGNITUDE(polarized), PHASE(polarized), REAL_PART(cartesized), IMAG_PART(cartesized));
 #endif
       result[i][x * new_window / window][0] = REAL_PART(cartesized);
       result[i][x * new_window / window][1] = IMAG_PART(cartesized);
@@ -215,9 +224,20 @@ int main(int n, char* args[]) {
 
   //Transform it:
   fftw_complex** stft = stft_forward(size, data, 4410);
-  
+
+#ifdef DEBUG_MODE
+/*
+  puts("STFT DATA:");
+
+  for (int i = 0; i < (size - 4410)/GET_STEP(4410); ++i) {
+    printf("FRAME %d:\n", i);
+    for (int x = 0; x < 4410; ++x) printf("%d\t%f\t%f\n", x, stft[i][x][0], stft[i][x][1]);
+  }
+*/
+#endif
+
   //Lengthen the transform:
-  fftw_complex** long_stft = time_stretch(4410, 8820, (size - 4410) / 2205, stft);
+  fftw_complex** long_stft = time_stretch(4410, 8820, (size - 4410) / GET_STEP(4410), stft);
 
   //Back-transform it:
   double* output_data = stft_backward(2 * size, long_stft, 8820);
@@ -227,11 +247,11 @@ int main(int n, char* args[]) {
   for (int i = 0; i < 2 * size; ++i) true_output[i] = (short) output_data[i];
 
   //Clean up:
-  stft_free((size - 4410) / 2205, stft);
-  stft_free((size - 4410) / 2205, long_stft);
+  stft_free((size - 4410) / GET_STEP(4410), stft);
+  stft_free((size - 4410) / GET_STEP(4410), long_stft);
   free(data);
   free(output_data);
 
   //Output:
-  save_wav(out, size, true_output, 16, quantization);
+  save_wav(out, 2 * size, true_output, 16, quantization);
 }
