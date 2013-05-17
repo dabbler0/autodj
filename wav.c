@@ -32,7 +32,7 @@ double* load_wav(FILE* file, int* array_size, int* quantization, int channel_num
 
   int extra_block = precision * (channels - 1) / 8;
 
-  printf("#File %d big, precision %d, %d times per second.\n", size, precision, *quantization);
+  printf("Reading %d bytes, precision %d, at a frequency of %dHz.\n", size, precision, *quantization);
 
   double* result = (double*) malloc ((size * 8 / precision) * sizeof(double));
   
@@ -72,7 +72,7 @@ double* load_wav(FILE* file, int* array_size, int* quantization, int channel_num
 
 void save_wav(FILE* where, int n, void* data, short quanta, int freq) {
   int data_size = n * quanta / 8;
-  printf("#Writing %d nodes at %d nodes per second -- %d seconds of data (data size %d).\n", n, freq, n / freq, data_size);
+  printf("Writing %d nodes at %d nodes per second -- %d seconds of data (data size %d).\n", n, freq, n / freq, data_size);
   int full_size = data_size + 36;
   int wchunk_size = 16;
   short pcm_header = 1; //Linear quantization

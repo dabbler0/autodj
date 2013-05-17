@@ -11,7 +11,7 @@
 
 //Function macros:
 #define GET_STEP(w) ((w) / 2 + (w) % 2)
-//#define GET_STEP(w) (w)
+//#define GET_STEP(w) ((w) / 3 + (w) % 3)
 #define REAL_PART(c) (c).components[0]
 #define IMAG_PART(c) (c).components[1]
 #define MAGNITUDE(p) (p).components[0]
@@ -20,7 +20,7 @@
 #define ASSERT(b,m) ((b)?puts(m):0)
 
 //Mathy macros:
-#define HANNING_CONSTANT 0.5
+#define HANNING_CONSTANT 0.7
 #define PI 3.1415926535897932384626433832795L
 
 /*
@@ -31,14 +31,40 @@ typedef struct {
 } polar_complex;
 
 typedef struct {
-  double components[2];  
+  double components[2];
 } cartesian_complex;
 
 /*
   Get the Hanning window scaling factor at a particular position:
 */
 /*inline*/ double hanning_window(int n, int t) {
-  return HANNING_CONSTANT - (1 - HANNING_CONSTANT) * cos (2 * PI * n / t);
+
+/*
+  Traditional windows:
+*/
+
+  //Hanning/hamming window:
+  //return HANNING_CONSTANT - (1 - HANNING_CONSTANT) * cos (2 * PI * n / t);
+
+  //triangular window:
+  //return 0.5 - abs(n /2 - 0.5);
+
+  //Welch window:
+  //return pow((n - (double)(t - 1) / 2) / ((double)(t + 1) / 2), 2.0);
+
+/*
+  Half-step square-to-one windows:
+*/
+
+  //sqrt-triangular window:
+  return sqrt(0.5 - abs(n / t - 0.5));
+
+  //sin window:
+  //return sin(n * PI / t);
+
+  //rectuangular window:
+  //return 0.5;
+
 }
 
 /*
@@ -75,9 +101,7 @@ typedef struct {
   Wrap a phase back to between -PI and PI
 */
 /*inline*/ double phase_modulo(double p) {
-  while (p < -PI) p += 2 * PI;
-  while (p > PI) p -= 2 * PI;
-  return p;
+  return p - floor(p / (2 * PI)) * 2 * PI + (p > 0 ? -PI : PI);
 }
 
 /*inline*/ void stft_free(int len, fftw_complex** stft) {
@@ -125,8 +149,6 @@ fftw_complex** stft_forward (int n, double* data, int window) {
   fftw_free(fftw_input);
   fftw_free(fftw_output);
   
-  puts("Done cleaning up.");
-
   //Return:
   return result;
 }
@@ -176,7 +198,13 @@ double* stft_backward(int n, fftw_complex** data, int window) {
 
 fftw_complex** time_stretch(int window, int new_window, int n_windows, fftw_complex** input) {
   fftw_complex** result = (fftw_complex**) malloc (n_windows * sizeof(fftw_complex*));
-  double target_phases[window];
+  //double target_phases[window];
+  double input_last_phases[window];
+  double output_last_phases[window];
+
+  //Remember the step that was used here:
+  int step = GET_STEP(window);
+
 #ifdef DEBUG_MODE
   puts("BEGIN TIME STRETCH DEBUG");
 #endif
@@ -193,13 +221,23 @@ fftw_complex** time_stretch(int window, int new_window, int n_windows, fftw_comp
 #ifdef DEBUG_MODE
       printf("%d:{%f, %f}", x * new_window / window, input[i][x][0], input[i][x][1]);
 #endif
+
       cartesian_complex packaged = package(input[i][x]);
       polar_complex polarized = polarize(packaged);
 
       //Align its phase so that it is actually correct:
-      if (i > 0) PHASE(polarized) = target_phases[x];
-      target_phases[x] = phase_modulo(PHASE(polarized) + x * 2 * PI * new_window / window);
-      
+      double phase_difference = phase_modulo(PHASE(polarized) - input_last_phases[x]);
+#ifdef DEBUG_MODE      
+      //DEBUGGING:
+      double old_last_phases = output_last_phases[x];
+#endif
+      input_last_phases[x] = PHASE(polarized);
+      if (i > 0) PHASE(polarized) = phase_modulo(output_last_phases[x] + phase_difference * new_window / window);
+      output_last_phases[x] = PHASE(polarized);
+
+      //target_phases[x] = phase_modulo(PHASE(polarized) + x * 2 * PI * step / window * new_window / window);
+      //target_phases[x] = 0;
+
       //Set the output value to this value:
       cartesian_complex cartesized = cartesize(polarized);
 #ifdef DEBUG_MODE
@@ -221,9 +259,13 @@ int main(int n, char* args[]) {
   //Load the data:
   int size, quantization;
   double* data = load_wav(in, &size, &quantization, 1);
+  
+  puts("Performing forward transform...");
 
   //Transform it:
   fftw_complex** stft = stft_forward(size, data, 4410);
+
+  puts("Applying time-stretch translation...");
 
 #ifdef DEBUG_MODE
 /*
@@ -239,12 +281,15 @@ int main(int n, char* args[]) {
   //Lengthen the transform:
   fftw_complex** long_stft = time_stretch(4410, 8820, (size - 4410) / GET_STEP(4410), stft);
 
+  puts("Performing backward translation...");
+
   //Back-transform it:
-  double* output_data = stft_backward(2 * size, long_stft, 8820);
+  int new_size;
+  double* output_data = stft_backward((new_size = 2 * size), long_stft, 8820);
 
   //"short"-en it:
-  short true_output[2 * size];
-  for (int i = 0; i < 2 * size; ++i) true_output[i] = (short) output_data[i];
+  short true_output[new_size];
+  for (int i = 0; i < new_size; ++i) true_output[i] = (short) output_data[i] * 4;
 
   //Clean up:
   stft_free((size - 4410) / GET_STEP(4410), stft);
@@ -253,5 +298,5 @@ int main(int n, char* args[]) {
   free(output_data);
 
   //Output:
-  save_wav(out, 2 * size, true_output, 16, quantization);
+  save_wav(out, new_size, true_output, 16, quantization);
 }
