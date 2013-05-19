@@ -10,6 +10,6 @@ int main(int n, char* args[]) {
   int frequency = atoi(args[2]);
   int length = atoi(args[3]);
   short sinusoidal[22050 * length];
-  for (int i = 0; i < 22050 * length; ++i) sinusoidal[i] = (short)50000*sin(i * 2 * PI * frequency / 22050);
+  for (int i = 0; i < 22050 * length; ++i) sinusoidal[i] = (short)2000*sin(i * 2 * PI * frequency / 22050);
   save_wav(out, 22050 * length, sinusoidal, 16, 22050);
 }

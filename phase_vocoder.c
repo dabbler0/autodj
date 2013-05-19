@@ -8,6 +8,7 @@
 
 //Debug switch:
 //#define DEBUG_MODE
+//#define DUMP_EVEN_ODD
 
 //Function macros:
 #define GET_STEP(w) ((w) / 2 + (w) % 2)
@@ -18,10 +19,22 @@
 #define PHASE(p) (p).components[1]
 #define COMPONENTS(k) (k).components
 #define ASSERT(b,m) ((b)?puts(m):0)
+#define IS_NAN(k) ((k) != (k))
+
+#define OFLUSH fflush(stdout)
+
+//Changeable constant macros:
+#define FACTOR 6 / 5
+#define DEBUG_FILTER 88
 
 //Mathy macros:
 #define HANNING_CONSTANT 0.7
 #define PI 3.1415926535897932384626433832795L
+
+#ifdef DUMP_EVEN_ODD
+FILE* even;
+FILE* odd;
+#endif
 
 /*
   Imaginary number types:
@@ -44,7 +57,7 @@ typedef struct {
 */
 
   //Hanning/hamming window:
-  //return HANNING_CONSTANT - (1 - HANNING_CONSTANT) * cos (2 * PI * n / t);
+  return HANNING_CONSTANT - (1 - HANNING_CONSTANT) * cos (2 * PI * n / t);
 
   //triangular window:
   //return 0.5 - abs(n /2 - 0.5);
@@ -57,7 +70,7 @@ typedef struct {
 */
 
   //sqrt-triangular window:
-  return sqrt(0.5 - abs(n / t - 0.5));
+  //return sqrt(0.5 - abs(n / t - 0.5));
 
   //sin window:
   //return sin(n * PI / t);
@@ -84,6 +97,7 @@ typedef struct {
   polar_complex r;
   MAGNITUDE(r) = sqrt(REAL_PART(c) * REAL_PART(c) + IMAG_PART(c) * IMAG_PART(c));
   PHASE(r) = atan2(IMAG_PART(c), REAL_PART(c));
+  if (PHASE(r) != PHASE(r)) puts("Error occurred during polarize.");
   return r;
 }
 
@@ -92,8 +106,10 @@ typedef struct {
 */
 /*inline*/ cartesian_complex cartesize(polar_complex p) {
   cartesian_complex r;
+  int before = (PHASE(p) != PHASE(p));
   REAL_PART(r) = MAGNITUDE(p) * cos(PHASE(p));
   IMAG_PART(r) = MAGNITUDE(p) * sin(PHASE(p));
+  if (before ^ (PHASE(p) != PHASE(p))) puts("Error occurred during cartesize.");
   return r;
 }
 
@@ -101,7 +117,8 @@ typedef struct {
   Wrap a phase back to between -PI and PI
 */
 /*inline*/ double phase_modulo(double p) {
-  return p - floor(p / (2 * PI)) * 2 * PI + (p > 0 ? -PI : PI);
+  p = p - (signbit(p) ? -1 : 1) * floor(abs(p / (2 * PI))) * 2 * PI;
+  return fmin(p, 2 * PI - p);
 }
 
 /*inline*/ void stft_free(int len, fftw_complex** stft) {
@@ -164,7 +181,7 @@ double* stft_backward(int n, fftw_complex** data, int window) {
   int nc = (window / 2) + 1;
 
   //Construct the output array:
-  double* result = (double*) calloc (n, sizeof(double));
+  double* result = (double*) calloc (n * step + window, sizeof(double));
 
   //Construct our temporary io arrays:
   fftw_complex* fftw_input = (fftw_complex*) fftw_malloc(window * sizeof(fftw_complex));
@@ -173,7 +190,7 @@ double* stft_backward(int n, fftw_complex** data, int window) {
   //Create an fftw plan:
   fftw_plan stft_plan = fftw_plan_dft_c2r_1d (window, fftw_input, fftw_output, FFTW_MEASURE);
 
-  for (int i = 0, m = 0; m < (n - window) / step; (i += step) & (++m)) {
+  for (int i = 0, m = 0; m < n; (i += step) & (++m)) {
     //Fill the input array with the needed values:
     for (int x = 0; x < nc; ++x) {
       fftw_input[x][0] = data[m][x][0];
@@ -184,7 +201,12 @@ double* stft_backward(int n, fftw_complex** data, int window) {
     fftw_execute(stft_plan);
 
     //Overlap-add these values to the result:
-    for (int x = 0; x < window; ++x) result[i + x] += fftw_output[x] / window * hanning_window(x, window);
+    for (int x = 0; x < window; ++x) {
+      result[i + x] += fftw_output[x] / window * hanning_window(x, window);
+#ifdef DUMP_EVEN_ODD
+      fprintf(((m % 2) ? odd : even), "%d\t%f\n", i + x, fftw_output[x] / window * hanning_window(x, window));
+#endif
+    }
   }
   
   //Clean up:
@@ -196,58 +218,53 @@ double* stft_backward(int n, fftw_complex** data, int window) {
   return result;
 }
 
-fftw_complex** time_stretch(int window, int new_window, int n_windows, fftw_complex** input) {
-  fftw_complex** result = (fftw_complex**) malloc (n_windows * sizeof(fftw_complex*));
-  //double target_phases[window];
-  double input_last_phases[window];
-  double output_last_phases[window];
-
-  //Remember the step that was used here:
-  int step = GET_STEP(window);
-
-#ifdef DEBUG_MODE
-  puts("BEGIN TIME STRETCH DEBUG");
-#endif
-  //Record the size of the input and output arrays:
-  int inc = (window / 2) + 1;
-  int onc = (new_window / 2) + 1;
-
-  for (int i = 0; i < n_windows; ++i) {
-    //Allocate space for this transform:
-    result[i] = (fftw_complex*) malloc (onc * sizeof(fftw_complex));
+fftw_complex** time_stretch(int window, int n_windows, int new_n_windows, fftw_complex** input) {
+  fftw_complex** result = (fftw_complex**) malloc (new_n_windows * sizeof(fftw_complex*));
+  int nc = window / 2 + 1;
+  double factor = (double)new_n_windows / n_windows;
+  double expected_phases[nc];
     
-    for (int x = 0; x < inc; ++x) {
-      //Get polar coordinates for this transform value:
-#ifdef DEBUG_MODE
-      printf("%d:{%f, %f}", x * new_window / window, input[i][x][0], input[i][x][1]);
-#endif
+  for (int i = 0; i < nc; ++i) expected_phases[i] = 0;
 
-      cartesian_complex packaged = package(input[i][x]);
-      polar_complex polarized = polarize(packaged);
+  for (int i = 0; i < new_n_windows; ++i) {
+    result[i] = (fftw_complex*) malloc (nc * sizeof(fftw_complex));
 
-      //Align its phase so that it is actually correct:
-      double phase_difference = phase_modulo(PHASE(polarized) - input_last_phases[x]);
-#ifdef DEBUG_MODE      
-      //DEBUGGING:
-      double old_last_phases = output_last_phases[x];
-#endif
-      input_last_phases[x] = PHASE(polarized);
-      if (i > 0) PHASE(polarized) = phase_modulo(output_last_phases[x] + phase_difference * new_window / window);
-      output_last_phases[x] = PHASE(polarized);
+    double true_position = (double)i / factor;
+    
+    //Get the things we're going to interpolate for this value:
+    int bottom = floor(true_position),
+        top = ceil(true_position);
 
-      //target_phases[x] = phase_modulo(PHASE(polarized) + x * 2 * PI * step / window * new_window / window);
-      //target_phases[x] = 0;
+    if (top >= n_windows) top = n_windows - 1;
 
-      //Set the output value to this value:
-      cartesian_complex cartesized = cartesize(polarized);
-#ifdef DEBUG_MODE
-      printf(" -> {%f, %f} -> {%f, %f} -> {%f, %f}.\n", REAL_PART(packaged), IMAG_PART(packaged), MAGNITUDE(polarized), PHASE(polarized), REAL_PART(cartesized), IMAG_PART(cartesized));
-#endif
-      result[i][x * new_window / window][0] = REAL_PART(cartesized);
-      result[i][x * new_window / window][1] = IMAG_PART(cartesized);
+    for (int x = 0 ; x < nc; ++x) {
+      //Package the values in the input array as cartesian_complex
+      polar_complex resultant;
+      cartesian_complex cartesian_bottom = package(input[bottom][x]),
+                        cartesian_top = package(input[top][x]);
+
+      //Polarize our cartesian_complex values
+      polar_complex polar_bottom = polarize(cartesian_bottom),
+                    polar_top = polarize(cartesian_top);
+
+      //Interpolate the magnitude here:
+      if (top == bottom) MAGNITUDE(resultant) = MAGNITUDE(polar_bottom);
+      else MAGNITUDE(resultant) = MAGNITUDE(polar_bottom) * (top - true_position) + MAGNITUDE(polar_top) * (true_position - bottom);
+
+      //Interpolate the phases:
+      if (i == 0) expected_phases[x] = PHASE(resultant);
+      else PHASE(resultant) = expected_phases[x];
+      expected_phases[x] = phase_modulo(expected_phases[x] + (PHASE(polar_top) - PHASE(polar_bottom)) / factor);
+
+      cartesian_complex cartesized = cartesize(resultant);
+
+      //if (expected_phases[x] != expected_phases[x]) printf("%f\t%f\t%f\t%f\t%f\t{%f\t%f}\n", expected_phases[x], PHASE(polar_top), PHASE(polar_bottom), factor, PHASE(resultant), REAL_PART(cartesized), IMAG_PART(cartesized));
+
+      result[i][x][0] = REAL_PART(cartesized);
+      result[i][x][1] = IMAG_PART(cartesized);
     }
   }
-
+  
   //Return:
   return result;
 }
@@ -255,6 +272,11 @@ fftw_complex** time_stretch(int window, int new_window, int n_windows, fftw_comp
 int main(int n, char* args[]) {
   FILE* in = fopen(args[1], "rb");
   FILE* out = fopen(args[2], "wb");
+
+#ifdef DUMP_EVEN_ODD
+  even = fopen("even.dump.dat", "w");
+  odd = fopen("odd.dump.dat", "w");
+#endif
 
   //Load the data:
   int size, quantization;
@@ -267,29 +289,19 @@ int main(int n, char* args[]) {
 
   puts("Applying time-stretch translation...");
 
-#ifdef DEBUG_MODE
-/*
-  puts("STFT DATA:");
-
-  for (int i = 0; i < (size - 4410)/GET_STEP(4410); ++i) {
-    printf("FRAME %d:\n", i);
-    for (int x = 0; x < 4410; ++x) printf("%d\t%f\t%f\n", x, stft[i][x][0], stft[i][x][1]);
-  }
-*/
-#endif
-
   //Lengthen the transform:
-  fftw_complex** long_stft = time_stretch(4410, 8820, (size - 4410) / GET_STEP(4410), stft);
+  int new_windows;
+  fftw_complex** long_stft = time_stretch(4410, (size - 4410) / GET_STEP(4410), (new_windows = (size - 4410) * FACTOR / GET_STEP(4410)), stft);
 
   puts("Performing backward translation...");
 
   //Back-transform it:
-  int new_size;
-  double* output_data = stft_backward((new_size = 2 * size), long_stft, 8820);
+  int new_size = new_windows * GET_STEP(4410) + 4410;
+  double* output_data = stft_backward(new_windows, long_stft, 4410);
 
   //"short"-en it:
   short true_output[new_size];
-  for (int i = 0; i < new_size; ++i) true_output[i] = (short) output_data[i] * 4;
+  for (int i = 0; i < new_size; ++i) true_output[i] = (short) output_data[i];
 
   //Clean up:
   stft_free((size - 4410) / GET_STEP(4410), stft);
