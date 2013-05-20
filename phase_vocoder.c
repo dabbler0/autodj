@@ -24,7 +24,7 @@
 #define OFLUSH fflush(stdout)
 
 //Changeable constant macros:
-#define FACTOR 6 / 5
+#define FACTOR 5 / 6
 #define DEBUG_FILTER 88
 
 //Mathy macros:
@@ -211,8 +211,8 @@ double* stft_backward(int n, fftw_complex** data, int window) {
   
   //Clean up:
   fftw_destroy_plan(stft_plan);
-  fftw_free(fftw_input);
-  fftw_free(fftw_output);
+  //fftw_free(fftw_input);
+  //fftw_free(fftw_output);
 
   //Return:
   return result;
@@ -257,8 +257,6 @@ fftw_complex** time_stretch(int window, int n_windows, int new_n_windows, fftw_c
       expected_phases[x] = phase_modulo(expected_phases[x] + (PHASE(polar_top) - PHASE(polar_bottom)) / factor);
 
       cartesian_complex cartesized = cartesize(resultant);
-
-      //if (expected_phases[x] != expected_phases[x]) printf("%f\t%f\t%f\t%f\t%f\t{%f\t%f}\n", expected_phases[x], PHASE(polar_top), PHASE(polar_bottom), factor, PHASE(resultant), REAL_PART(cartesized), IMAG_PART(cartesized));
 
       result[i][x][0] = REAL_PART(cartesized);
       result[i][x][1] = IMAG_PART(cartesized);
@@ -305,10 +303,10 @@ int main(int n, char* args[]) {
 
   //Clean up:
   stft_free((size - 4410) / GET_STEP(4410), stft);
-  stft_free((size - 4410) / GET_STEP(4410), long_stft);
+  stft_free(new_windows, long_stft);
   free(data);
   free(output_data);
 
   //Output:
-  save_wav(out, new_size, true_output, 16, quantization);
+  save_wav(out, new_size, true_output, 16, quantization * FACTOR);
 }
