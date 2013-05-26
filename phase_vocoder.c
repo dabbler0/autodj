@@ -20,16 +20,19 @@
 #define COMPONENTS(k) (k).components
 #define ASSERT(b,m) ((b)?puts(m):0)
 #define IS_NAN(k) ((k) != (k))
+#define LOG_BASE(a,b) ((int)(log(a)/log(b)))
 
 #define OFLUSH fflush(stdout)
 
 //Changeable constant macros:
 #define FACTOR 5 / 6
 #define DEBUG_FILTER 88
+#define DICTATION_THRESHOLD_MAGIC_NUMBER 2
 
 //Mathy macros:
 #define HANNING_CONSTANT 0.7
 #define PI 3.1415926535897932384626433832795L
+#define CHROMATIC_RATIO 1.059463094359295264561825294946341700779204317494185628559208L
 
 #ifdef DUMP_EVEN_ODD
 FILE* even;
@@ -144,6 +147,7 @@ fftw_complex** stft_forward (int n, double* data, int window) {
   fftw_complex* fftw_output = fftw_alloc_complex (nc);
 
   //Create an fftw plan:
+  //Create an fftw plan:
   fftw_plan stft_plan = fftw_plan_dft_r2c_1d (window, fftw_input, fftw_output, FFTW_MEASURE);
 
   for (int i = 0, m = 0; m < (n - window) / step; (i += step) & (++m)) {
@@ -250,7 +254,6 @@ fftw_complex** time_stretch(int window, int n_windows, int new_n_windows, fftw_c
       //Interpolate the magnitude here:
       if (top == bottom) MAGNITUDE(resultant) = MAGNITUDE(polar_bottom);
       else MAGNITUDE(resultant) = MAGNITUDE(polar_bottom) * (top - true_position) + MAGNITUDE(polar_top) * (true_position - bottom);
-
       //Interpolate the phases:
       if (i == 0) expected_phases[x] = PHASE(resultant);
       else PHASE(resultant) = expected_phases[x];
@@ -265,6 +268,58 @@ fftw_complex** time_stretch(int window, int n_windows, int new_n_windows, fftw_c
   
   //Return:
   return result;
+}
+
+typedef struct {
+  int* notes_present;
+  int size;
+} note_record;
+
+note_record* music_dictate(int n, int window, fftw_complex** stft, int quantization) {
+  
+  note_record* r = (note_record*)malloc(n * sizeof(note_record));
+
+  for (int i = 0; i < n; ++i) {
+    //Set up our record of what frequencies are present:
+    int presences[LOG_BASE(quantization, CHROMATIC_RATIO)];
+
+    //Set up our record of the peak magnitude and other magnitudes:
+    polar_complex polarized[window];
+    double peak_magnitude;
+
+    //Determine the peak magnitude of this frame:
+    for (int x = 0; x < window; ++x) {
+      polarized[x] = polarize(package(stft[i][x]));
+      if (MAGNITUDE(polarized[x]) > peak_magnitude) peak_magnitude = MAGNITUDE(polarized[x]);
+    }
+
+    //Record the presence of anything within the magic number of the peak magnitude:
+    int freqs = 0;
+    for (int x = 0; x < window; ++x) {
+      if (peak_magnitude / MAGNITUDE(polarized[x]) < DICTATION_THRESHOLD_MAGIC_NUMBER) {
+        int index;
+        if (!presences[index = LOG_BASE(x * quantization / window, CHROMATIC_RATIO)]) {
+          ++freqs;
+          presences[index] = 1;
+        }
+      }
+    }
+    
+    //Write a note record for this frame:
+    note_record c;
+    c.notes_present = (int*)malloc(freqs * sizeof(int));
+    c.size = freqs;
+    for (int x = 0, m = 0; x < window; ++i) {
+      if (presences[x]) {
+        c.notes_present[m] = x;
+        ++m;
+      }
+    }
+
+    //Append this note record to the return value:
+    r[i] = c;
+  }
+  return r;
 }
 
 int main(int n, char* args[]) {
