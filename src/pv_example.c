@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include "../include/phase_vocoder.h"
 
-//#define DEBUG
+#define DEBUG
 
 int main(int n, char* args[]) {
   if (n > 3) {

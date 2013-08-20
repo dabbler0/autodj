@@ -4,7 +4,7 @@ all: bin/wav.o bin/phase_vocoder.o
 
 sound: recompile
 	src/pv.o sound/sinusoidal.wav 0.9 sound/sinusoidal_copy.wav 2> pv.o.err
-	aplay sound/sinusoidal_long.wav
+	aplay sound/sinusoidal_copy.wav
 	less pv.o.err
 
 test: recompile

@@ -204,20 +204,10 @@ double *stft_backward_feed (stft_backward_state *state, cartesian *next) {
   //"Stitch" it to the last one, storing in the heap and normalizing
   for (int i = 0; i < n; ++i) {
     result[i] = (state->window[i] * hanning_window(i + n, n * 2) + state->output[i] * hanning_window(i, n * 2)) / (n * 2);
-    if (result[i] > BIG_NUMBER) {
-      fputs("ERROR: OVERFLOW\n", stderr);
-      fputs("N\tINPUT REAL\tINPUT IMAG", stderr);
-      for (int x = 0; x <= n; ++x) {
-        fprintf(stderr, "%d\t%f\t%f\n", x, next[x].real, next[x].imag);
-      }
-      exit(1);
-    }
   }
-  puts("FRAME OK");
 
   //Update our state window
   for (int i = 0; i < n; ++i) state->window[i] = state->output[i + n];
-
 
   //Return a pointer to the data.
   return result;
@@ -285,10 +275,6 @@ CartesianListNode *stft_stretch_feed (stft_stretch_state *state, cartesian *next
       
       //Append the interpolated polar, in cartesian form, to our heap data
       frame[i] = unpolarize(polar_interpolated);
-
-      if (frame[i].real > BIG_NUMBER || frame[i].imag > BIG_NUMBER) {
-        fprintf(stderr, "WARNING: complex (%f, %f) (from %f and %f at position %f) is dangerously big\n", frame[i].real, frame[i].imag, polar_interpolated.magnitude, state->last_frame[i].magnitude, polar_next[i].magnitude);
-      }
     }
     
     //Append the new frame to the existent list
